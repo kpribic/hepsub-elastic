@@ -10,6 +10,7 @@ try {
 const { Client } = require('@elastic/elasticsearch')
 var express = require('express');
 const app = express();
+const request = require('request');
 var bodyParser = require("body-parser");
 app.use(bodyParser.json());
 
@@ -25,26 +26,34 @@ app.all('*', function(req, res, next) {
 /* HEP Post Paths */
 app.post('/get/:id', function (req, res) {
   if (config.debug) console.log('NEW API POST REQ', req.body);
-  var data = req.body;
-  if (!data|!config.elastic) { res.status(500).end(); return }
-  if (!data.constructor === Array) data = [data];
-  // Reduce to an Array containing the selected HEP Field
-  var filtered_data = data.map(function (entry) {
-    return entry[config.elastic.hep_field];
+  let body = req.body;
+  if (!body || !body.data || !config.elastic) { res.status(500).end(); return }
+  let data = body.data;
+
+  if (!Array.isArray(data)) {
+      data = [data]
+  }
+
+  let filtered_data = [];
+  data.forEach(item => {
+    filtered_data.push(item);
   });
-  if (filtered_data === undefined || filtered_data.length == 0) {
+  if (filtered_data.length === 0) {
 	res.status(500).end();
   } else {
-	// Form ES Query
-  	var settings = {
-	  "size" : 100,
-  	  "query" : {
-  	      "terms" : {
-  	          "boost" : 1.0
-  	      }
-  	  }
-  	};
-  	settings.query.terms[config.elastic.field] = filtered_data;
+    let should = filtered_data.map(callId => {
+     return {"match": {"callId": callId}}
+  });
+  
+  let settings = {
+    size: 100,
+    query: {
+      bool: {
+      should: should
+      }
+    }
+  };
+
 	if (config.elastic.size) { settings.size = config.elastic.size; }
   	getElastic(settings, res);
   }
@@ -78,28 +87,38 @@ var getElastic = function(settings, res){
 }
 
 /* HEP PUBSUB Hooks */
-var req = require('req-fast');
 var api = config.backend;
 const uuidv1 = require('uuid/v1');
 var uuid = uuidv1();
 var ttl = config.service.ttl;
+var token = config.token;
 
 var publish = function(){
+  
   try {
     var settings = config.service;
-    settings.uuid = uuid;
-    req({
-      method: 'POST',
-      url: api,
-      dataType: 'JSON',
-      data: settings
-    }, (err, res) => {
-      if (err) {
-        if (config.debug) console.log('REGISTER API ERROR', err.message);
-	process.exit(1);
-      }
-      if (config.debug) console.log('REGISTER API',res.body||'no response')
-    })
+    settings.uuid = uuid;  
+
+    const data = JSON.stringify(settings)
+
+    const options = {
+        url: api,
+        method: 'POST',
+        json: settings,
+        headers: {
+          'Auth-Token': token
+        }
+    }
+
+    if (config.debug) console.log("Body:", JSON.stringify(options));
+
+    request(options, function (error, response, body) {
+        if (!error && response.statusCode == 200) {
+            if (config.debug) console.log("BODY", body) // Print the shortened url.
+        } else {
+            if (config.debug) console.log('REGISTER API ERROR: ', body.message)
+        }
+    });        
   } catch(e) { console.error(e) }
 }
 
